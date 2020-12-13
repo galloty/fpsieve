@@ -24,11 +24,9 @@ class MpArith
 private:
 	const uint64_t _p, _q;
 	const uint64_t _one;	// 2^64 mod p
-	const uint64_t _r2;		// (2^64)^2 mod p
+	// const uint64_t _r2;		// (2^64)^2 mod p
 
 private:
-	static int ilog2(const uint64_t x) { return 63 - __builtin_clzll(x); }
-
 	// p * p_inv = 1 (mod 2^64) (Newton's method)
 	static uint64_t invert(const uint64_t p)
 	{
@@ -44,18 +42,18 @@ private:
 		return (r < 0) ? uint64_t(r + _p) : uint64_t(r);
 	}
 
-	uint64_t two_pow_64() const
-	{
-		uint64_t t = add(_one, _one); t = add(t, t);	// 4
-		for (size_t i = 0; i < 5; ++i) t = mul(t, t);	// 4^{2^5} = 2^64
-		return uint64_t(t);
-	}
+	// uint64_t two_pow_64() const
+	// {
+	// 	uint64_t t = add(_one, _one); t = add(t, t);	// 4
+	// 	for (size_t i = 0; i < 5; ++i) t = mul(t, t);	// 4^{2^5} = 2^64
+	// 	return uint64_t(t);
+	// }
 
 public:
-	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p), _r2(two_pow_64()) { }
+	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p) {}	//, _r2(two_pow_64()) { }
 
-	uint64_t toMp(const uint64_t n) const { return mul(n, _r2); }
-	uint64_t toInt(const uint64_t r) const { return REDC(r); }
+	// uint64_t toMp(const uint64_t n) const { return mul(n, _r2); }
+	// uint64_t toInt(const uint64_t r) const { return REDC(r); }
 
 	uint64_t one() const { return _one; }
 
@@ -204,10 +202,10 @@ private:
 	void output(const uint64_t p, const uint32_t n, const bool positive, const size_t index)
 	{
 		const char sign = positive ? '+' : '-';
-		std::stringstream ss; ss << p << " | " << n << "!1" << sign << "1";
+		std::stringstream ss; ss << p << " | " << n << "!" << sign << "1";
 		auto & sieve = positive ? _sieve_p : _sieve_m;
 		std::lock_guard<std::mutex> guard(_output_mutex);
-		// if (sieve[index]) return;
+		// if (sieve[index]) return;	// no duplicate
 		sieve[index] = true;
 		// std::cout << ss.str() << "                 " << std::endl;
 		std::ofstream logFile("fpsieve.log", std::ios::app);
@@ -222,27 +220,38 @@ private:
 	{
 		uint32_t n_min = _n_min, n_count = _n_count;
 
+		// parallel x 4
 		for (size_t j = 0; j < p_size; j += 4)
 		{
 			uint64_t p[4]; for (size_t k = 0; k < 4; ++k) p[k] = p_vect[j + k];
 			MpArith mp_0(p[0]), mp_1(p[1]), mp_2(p[2]), mp_3(p[3]);
+
 			uint64_t one[4]; one[0] = mp_0.one(); one[1] = mp_1.one(); one[2] = mp_2.one(); one[3] = mp_3.one();
 			uint64_t minus_one[4]; minus_one[0] = mp_0.sub(0, one[0]); minus_one[1] = mp_1.sub(0, one[1]); minus_one[2] = mp_2.sub(0, one[2]); minus_one[3] = mp_3.sub(0, one[3]);
+
 			// ri = residue of i, rf = residue of i!
 			uint64_t ri[4], rf[4]; for (size_t k = 0; k < 4; ++k) rf[k] = ri[k] = one[k];
+
 			for (uint64_t i = 2; i < n_min; ++i)
 			{
 				ri[0] = mp_0.add(ri[0], one[0]); ri[1] = mp_1.add(ri[1], one[1]); ri[2] = mp_2.add(ri[2], one[2]); ri[3] = mp_3.add(ri[3], one[3]);
 				rf[0] = mp_0.mul(rf[0], ri[0]); rf[1] = mp_1.mul(rf[1], ri[1]); rf[2] = mp_2.mul(rf[2], ri[2]); rf[3] = mp_3.mul(rf[3], ri[3]);
 			}
+
 			for (uint32_t i = 0; i < n_count; ++i)
 			{
 				ri[0] = mp_0.add(ri[0], one[0]); ri[1] = mp_1.add(ri[1], one[1]); ri[2] = mp_2.add(ri[2], one[2]); ri[3] = mp_3.add(ri[3], one[3]);
 				rf[0] = mp_0.mul(rf[0], ri[0]); rf[1] = mp_1.mul(rf[1], ri[1]); rf[2] = mp_2.mul(rf[2], ri[2]); rf[3] = mp_3.mul(rf[3], ri[3]);
-				for (size_t k = 0; k < 4; ++k)
+
+				bool found_neg = (rf[0] == one[0]) | (rf[1] == one[1]) | (rf[2] == one[2]) | (rf[3] == one[3]);
+				bool found_pos = (rf[0] == minus_one[0]) | (rf[1] == minus_one[1]) | (rf[2] == minus_one[2]) | (rf[3] == minus_one[3]);
+				if (found_neg | found_pos)
 				{
-					if (rf[k] == one[k]) output(p[k], n_min + i, false, i);
-					if (rf[k] == minus_one[k]) output(p[k], n_min + i, true, i);
+					for (size_t k = 0; k < 4; ++k)
+					{
+						if (rf[k] == one[k]) output(p[k], n_min + i, false, i);
+						if (rf[k] == minus_one[k]) output(p[k], n_min + i, true, i);
+					}
 				}
 			}
 		}
