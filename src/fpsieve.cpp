@@ -309,7 +309,7 @@ public:
 
 		while (_running_threads != 0)
 		{
-			std::this_thread::sleep_for(std::chrono::seconds(5));
+			std::this_thread::sleep_for(std::chrono::seconds(10));
 			const uint64_t p1 = _p_cur;
 			const auto t1 = std::chrono::steady_clock::now();
 			const std::chrono::duration<double> dt = t1 - t0;
@@ -344,8 +344,8 @@ int main(int argc, char * argv[])
 	std::cerr << "   p_max: the end of the factor range, in M (10^9) values (default p_min + 1)" << std::endl << std::endl;
 
 	const size_t n_threads = (argc > 1) ? std::atoi(argv[1]) : 3;
-	const uint32_t n_min = (argc > 2) ? std::min(std::atoi(argv[2]), 2) : 300000;
-	const uint32_t n_count = (argc > 3) ? std::min(std::atoi(argv[3]), 2) : 100000;
+	const uint32_t n_min = (argc > 2) ? std::max(std::atoi(argv[2]), 2) : 300000;
+	const uint32_t n_count = (argc > 3) ? std::max(std::atoi(argv[3]), 2) : 100000;
 	const uint64_t p_min = (argc > 4) ? std::min(std::atoll(argv[4]), 18446744073708ll) : 0;
 	const uint64_t p_max = (argc > 5) ? std::min(std::atoll(argv[5]), 18446744073709ll) : p_min + 1;
 
