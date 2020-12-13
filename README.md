@@ -1,2 +1,2 @@
 # fpsieve
-Sieve Factorial and Primorial numbers
+Sieve factorial numbers
