@@ -11,6 +11,7 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <array>
 #include <queue>
 #include <vector>
 #include <thread>
@@ -19,16 +20,30 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <chrono>
 
 // Peter L. Montgomery, Modular multiplication without trial division, Math. Comp.44 (1985), 519–521.
+
+class MpRes
+{
+private:
+	uint64_t _r;
+
+public:
+	MpRes() {}
+	explicit MpRes(const uint64_t r) : _r(r) {}
+
+	uint64_t get() const { return _r; }
+	bool operator==(const MpRes & rhs) const { return _r == rhs._r; }
+};
+
 class MpArith
 {
 private:
 	const uint64_t _p, _q;
-	const uint64_t _one;	// 2^64 mod p
-	// const uint64_t _r2;		// (2^64)^2 mod p
+	const MpRes _one;		// 2^64 mod p
+	const MpRes _r2;		// (2^64)^2 mod p
 
 private:
 	// p * p_inv = 1 (mod 2^64) (Newton's method)
-	static uint64_t invert(const uint64_t p)
+	constexpr uint64_t invert(const uint64_t p)
 	{
 		uint64_t p_inv = 1, prev = 0;
 		while (p_inv != prev) { prev = p_inv; p_inv *= 2 - p * p_inv; }
@@ -42,36 +57,74 @@ private:
 		return (r < 0) ? uint64_t(r + _p) : uint64_t(r);
 	}
 
-	// uint64_t two_pow_64() const
-	// {
-	// 	uint64_t t = add(_one, _one); t = add(t, t);	// 4
-	// 	for (size_t i = 0; i < 5; ++i) t = mul(t, t);	// 4^{2^5} = 2^64
-	// 	return uint64_t(t);
-	// }
+	MpRes two_pow_64() const
+	{
+		MpRes t = add(_one, _one); t = add(t, t);		// 4
+		for (size_t i = 0; i < 5; ++i) t = mul(t, t);	// 4^{2^5} = 2^64
+		return t;
+	}
 
 public:
-	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p) {}	//, _r2(two_pow_64()) { }
+	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p), _r2(two_pow_64()) { }
 
-	// uint64_t toMp(const uint64_t n) const { return mul(n, _r2); }
-	// uint64_t toInt(const uint64_t r) const { return REDC(r); }
+	MpRes toMp(const uint64_t n) const { return mul(MpRes(n), _r2); }
+	uint64_t toInt(const MpRes r) const { return REDC(r.get()); }
 
-	uint64_t one() const { return _one; }
+	MpRes one() const { return _one; }
 
-	uint64_t add(const uint64_t a, const uint64_t b) const
+	MpRes add(const MpRes a, const MpRes b) const
 	{
-		const uint64_t c = (a >= _p - b) ? _p : 0;
-		return a + b - c;
+		const uint64_t c = (a.get() >= _p - b.get()) ? _p : 0;
+		return MpRes(a.get() + b.get() - c);
 	}
 
-	uint64_t sub(const uint64_t a, const uint64_t b) const
+	MpRes sub(const MpRes a, const MpRes b) const
 	{
-		const uint64_t c = (a < b) ? _p : 0;
-		return a - b + c;
+		const uint64_t c = (a.get() < b.get()) ? _p : 0;
+		return MpRes(a.get() - b.get() + c);
 	}
 
-	uint64_t mul(const uint64_t a, const uint64_t b) const
+	MpRes mul(const MpRes a, const MpRes b) const
 	{
-		return REDC(a * __uint128_t(b));
+		return MpRes(REDC(a.get() * __uint128_t(b.get())));
+	}
+};
+
+typedef std::array<MpRes, 4> MpRes4;
+
+class MpArith4
+{
+private:
+	const MpArith _mp[4];
+
+public:
+	MpArith4(const uint64_t * const p) : _mp{ p[0], p[1], p[2], p[3] } {}
+
+	MpRes4 toMp(const uint64_t n) const
+	{
+		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].toMp(n); return r;
+	}
+
+	static MpRes4 zero() { return MpRes4{ MpRes(0), MpRes(0), MpRes(0), MpRes(0) }; }
+
+	MpRes4 one() const
+	{
+		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].one(); return r;
+	}
+
+	MpRes4 add(const MpRes4 a, const MpRes4 b) const
+	{
+		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].add(a[k], b[k]); return r;
+	}
+
+	MpRes4 sub(const MpRes4 a, const MpRes4 b) const
+	{
+		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].sub(a[k], b[k]); return r;
+	}
+
+	MpRes4 mul(const MpRes4 a, const MpRes4 b) const
+	{
+		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].mul(a[k], b[k]); return r;
 	}
 };
 
@@ -88,6 +141,7 @@ private:
 private:
 	const uint32_t _n_min, _n_count;
 	const uint64_t _p_min, _p_max;
+	const size_t _thread_count;
 
 	std::vector<bool> _sieve_m, _sieve_p;
 
@@ -127,7 +181,10 @@ private:
 
 		const uint64_t p0 = ((1000000000 * _p_min) / sp_max) * sp_max, p1 = ((1000000000 * _p_max) / sp_max + 1) * sp_max;
 
-		std::cout << ", " << ((p0 == 0) ? 3 : p0) << " <= p <= " << p1 << std::endl;
+		{
+			std::lock_guard<std::mutex> guard(_output_mutex);
+			std::cout << ", " << ((p0 == 0) ? 3 : p0) << " <= p <= " << p1 << ", " << _thread_count << " threads" << std::endl;
+		}
 
 		if (_p_min == 0)
 		{
@@ -220,31 +277,43 @@ private:
 	{
 		uint32_t n_min = _n_min, n_count = _n_count;
 
+		// if i <= n_pair then (i - 1) * i < p
+		const uint32_t n_pair = std::max(2u, std::min(n_min, uint32_t(std::sqrt(double(p_vect[0]))) & ~1u));
+
 		// parallel x 4
 		for (size_t j = 0; j < p_size; j += 4)
 		{
-			uint64_t p[4]; for (size_t k = 0; k < 4; ++k) p[k] = p_vect[j + k];
-			MpArith mp_0(p[0]), mp_1(p[1]), mp_2(p[2]), mp_3(p[3]);
+			const uint64_t * const p = &p_vect[j];
+			MpArith4 mp(p);
 
-			uint64_t one[4]; one[0] = mp_0.one(); one[1] = mp_1.one(); one[2] = mp_2.one(); one[3] = mp_3.one();
-			uint64_t minus_one[4]; minus_one[0] = mp_0.sub(0, one[0]); minus_one[1] = mp_1.sub(0, one[1]); minus_one[2] = mp_2.sub(0, one[2]); minus_one[3] = mp_3.sub(0, one[3]);
+			const MpRes4 one = mp.one(), minus_one = mp.sub(mp.zero(), one), two = mp.add(one, one), four = mp.add(two, two), eight = mp.add(four, four);
 
 			// ri = residue of i, rf = residue of i!
-			uint64_t ri[4], rf[4]; for (size_t k = 0; k < 4; ++k) rf[k] = ri[k] = one[k];
+			MpRes4 ri = one, rf = one;
+			// residue of i * (i + 1), the step is (i + 2) * (i + 3) - i * (i + 1) = 4 * i + 6
+			MpRes4 r_ixip1 = mp.zero(), r_step = mp.add(four, two);
 
-			for (uint64_t i = 2; i < n_min; ++i)
+			for (uint64_t i = 2; i < n_pair; i += 2)
 			{
-				ri[0] = mp_0.add(ri[0], one[0]); ri[1] = mp_1.add(ri[1], one[1]); ri[2] = mp_2.add(ri[2], one[2]); ri[3] = mp_3.add(ri[3], one[3]);
-				rf[0] = mp_0.mul(rf[0], ri[0]); rf[1] = mp_1.mul(rf[1], ri[1]); rf[2] = mp_2.mul(rf[2], ri[2]); rf[3] = mp_3.mul(rf[3], ri[3]);
+				r_ixip1 = mp.add(r_ixip1, r_step);
+				r_step = mp.add(r_step, eight);
+				rf = mp.mul(rf, r_ixip1);
+			}
+
+			ri = mp.toMp(n_pair - 1);
+			for (uint64_t i = n_pair; i < n_min; ++i)
+			{
+				ri = mp.add(ri, one);
+				rf = mp.mul(rf, ri);
 			}
 
 			for (uint32_t i = 0; i < n_count; ++i)
 			{
-				ri[0] = mp_0.add(ri[0], one[0]); ri[1] = mp_1.add(ri[1], one[1]); ri[2] = mp_2.add(ri[2], one[2]); ri[3] = mp_3.add(ri[3], one[3]);
-				rf[0] = mp_0.mul(rf[0], ri[0]); rf[1] = mp_1.mul(rf[1], ri[1]); rf[2] = mp_2.mul(rf[2], ri[2]); rf[3] = mp_3.mul(rf[3], ri[3]);
+				ri = mp.add(ri, one);
+				rf = mp.mul(rf, ri);
 
-				bool found_neg = (rf[0] == one[0]) | (rf[1] == one[1]) | (rf[2] == one[2]) | (rf[3] == one[3]);
-				bool found_pos = (rf[0] == minus_one[0]) | (rf[1] == minus_one[1]) | (rf[2] == minus_one[2]) | (rf[3] == minus_one[3]);
+				bool found_neg = false, found_pos = false;
+				for (size_t k = 0; k < 4; ++k) { found_neg |= (rf[k] == one[k]); found_pos |= (rf[k] == minus_one[k]); }
 				if (found_neg | found_pos)
 				{
 					for (size_t k = 0; k < 4; ++k)
@@ -291,7 +360,7 @@ private:
 
 public:
 	Sieve(const uint32_t n_min, const uint32_t n_count, const uint64_t p_min, const uint64_t p_max, const size_t thread_count)
-		: _n_min(n_min), _n_count(n_count), _p_min(p_min), _p_max(p_max)
+		: _n_min(n_min), _n_count(n_count), _p_min(p_min), _p_max(p_max), _thread_count(thread_count)
 	{
 		_sieve_m.resize(n_count, false); _sieve_p.resize(n_count, false);
 
@@ -340,12 +409,12 @@ int main(int argc, char * argv[])
 	std::cerr << "   n_threads: the number of threads (default 3)" << std::endl;
 	std::cerr << "   n_min: the minimum n (n! +/- 1) to search (default 300000)" << std::endl;
 	std::cerr << "   n_count: the number of n to search (default 100000)" << std::endl;
-	std::cerr << "   p_min: the start of the factor range, in M (10^9) values (default 0)" << std::endl;
-	std::cerr << "   p_max: the end of the factor range, in M (10^9) values (default p_min + 1)" << std::endl << std::endl;
+	std::cerr << "   p_min: the start of the factor range, in Giga (10^9) values (default 0)" << std::endl;
+	std::cerr << "   p_max: the end of the factor range, in Giga (10^9) values (default p_min + 1)" << std::endl << std::endl;
 
 	const size_t n_threads = (argc > 1) ? std::atoi(argv[1]) : 3;
-	const uint32_t n_min = (argc > 2) ? std::max(std::atoi(argv[2]), 2) : 300000;
-	const uint32_t n_count = (argc > 3) ? std::max(std::atoi(argv[3]), 2) : 100000;
+	const uint32_t n_min = (argc > 2) ? (std::max(std::atoi(argv[2]), 2) & ~1) : 300000;	// even
+	const uint32_t n_count = (argc > 3) ? (std::max(std::atoi(argv[3]), 2) & ~1) : 100000;	// even
 	const uint64_t p_min = (argc > 4) ? std::min(std::atoll(argv[4]), 18446744073708ll) : 0;
 	const uint64_t p_max = (argc > 5) ? std::min(std::atoll(argv[5]), 18446744073709ll) : p_min + 1;
 
