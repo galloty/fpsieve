@@ -19,8 +19,11 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <atomic>
 #include <chrono>
 
+#define		MEGA	1000000000
+
 // Peter L. Montgomery, Modular multiplication without trial division, Math. Comp.44 (1985), 519–521.
 
+// Montgomery form: if 0 <= a < p then r is 2^64 * a mod p
 class MpRes
 {
 private:
@@ -34,6 +37,7 @@ public:
 	bool operator==(const MpRes & rhs) const { return _r == rhs._r; }
 };
 
+// Montgomery modular arithmetic in Z/pZ
 class MpArith
 {
 private:
@@ -50,6 +54,7 @@ private:
 		return p_inv;
 	}
 
+	// The Montgomery REDC algorithm
 	uint64_t REDC(const __uint128_t t) const
 	{
 		const uint64_t m = uint64_t(t) * _q;
@@ -67,10 +72,10 @@ private:
 public:
 	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p), _r2(two_pow_64()) { }
 
-	MpRes toMp(const uint64_t n) const { return mul(MpRes(n), _r2); }
-	uint64_t toInt(const MpRes r) const { return REDC(r.get()); }
+	MpRes toMp(const uint64_t n) const { return mul(MpRes(n), _r2); }	// n * (2^64)^2 = (n * 2^64) * (1 * 2^64)
+	uint64_t toInt(const MpRes r) const { return REDC(r.get()); }		// REDC((a * 2^64) * (b * 2^64)) = a*b * 2^64 then REDC((n * 2^64) * 1)) = n
 
-	MpRes one() const { return _one; }
+	MpRes one() const { return _one; }	// Montgomery form of 1
 
 	MpRes add(const MpRes a, const MpRes b) const
 	{
@@ -89,6 +94,8 @@ public:
 		return MpRes(REDC(a.get() * __uint128_t(b.get())));
 	}
 };
+
+// Montgomery arithmetic on vectors of 4 primes: hide the latency of the MUL instruction.
 
 typedef std::array<MpRes, 4> MpRes4;
 
@@ -156,8 +163,9 @@ private:
 	std::atomic<uint64_t> _p_cur = 0;
 
 private:
-	void prime_gen()
+	void pseudo_prime_gen()
 	{
+		// Segmented sieve of Eratosthenes: outputs have no factor < 2^16.
 		static const uint32_t sp_max = 1 << 16;
 		static const size_t sieve_size = sp_max / 2;	// sieve with an odd prime table.
 		static const size_t odd_prime_count = 6541;		// # odd primes with p < 2^16.
@@ -179,7 +187,7 @@ private:
 
 		for (size_t k = 0; k < sieve_size; ++k) sieve[k] = false;
 
-		const uint64_t p0 = ((1000000000 * _p_min) / sp_max) * sp_max, p1 = ((1000000000 * _p_max) / sp_max + 1) * sp_max;
+		const uint64_t p0 = ((MEGA * _p_min) / sp_max) * sp_max, p1 = ((MEGA * _p_max) / sp_max + 1) * sp_max;
 
 		{
 			std::lock_guard<std::mutex> guard(_output_mutex);
@@ -248,7 +256,6 @@ private:
 
 			while (queue_size > max_queue_size)
 			{
-				// std::cout << "prime_gen: waiting... p ~ " << jp + 1 << std::endl;
 				std::this_thread::sleep_for(std::chrono::milliseconds(100));
 				std::lock_guard<std::mutex> guard(_p_queue_mutex);
 				queue_size = _p_queue.size();
@@ -269,7 +276,7 @@ private:
 		if (logFile.is_open())
 		{
 			logFile << ss.str() << std::endl;
-			/*logFile.flush();*/ logFile.close();
+			logFile.flush(); logFile.close();
 		}
 	}
 
@@ -277,7 +284,7 @@ private:
 	{
 		uint32_t n_min = _n_min, n_count = _n_count;
 
-		// if i <= n_pair then (i - 1) * i < p
+		// if i <= n_pair then (i - 1) * i < p. Compute n! = (2 * 3) * (4 * 5) * ... * ((n - 1) * n)
 		const uint32_t n_pair = std::max(2u, std::min(n_min, uint32_t(std::sqrt(double(p_vect[0]))) & ~1u));
 
 		// parallel x 4
@@ -293,6 +300,7 @@ private:
 			// residue of i * (i + 1), the step is (i + 2) * (i + 3) - i * (i + 1) = 4 * i + 6
 			MpRes4 r_ixip1 = mp.zero(), r_step = mp.add(four, two);
 
+			// Factorial with pairs of numbers: i! = ((i - 1) * i) * (i - 2)!
 			for (uint64_t i = 2; i < n_pair; i += 2)
 			{
 				r_ixip1 = mp.add(r_ixip1, r_step);
@@ -300,6 +308,7 @@ private:
 				rf = mp.mul(rf, r_ixip1);
 			}
 
+			// Factorial: i! = i * (i - 1)!
 			ri = mp.toMp(n_pair - 1);
 			for (uint64_t i = n_pair; i < n_min; ++i)
 			{
@@ -307,6 +316,7 @@ private:
 				rf = mp.mul(rf, ri);
 			}
 
+			// Factorial and check if i! = +/-1
 			for (uint32_t i = 0; i < n_count; ++i)
 			{
 				ri = mp.add(ri, one);
@@ -364,7 +374,7 @@ public:
 	{
 		_sieve_m.resize(n_count, false); _sieve_p.resize(n_count, false);
 
-		std::thread t_gen_p([=] { prime_gen(); }); t_gen_p.detach();
+		std::thread t_gen_p([=] { pseudo_prime_gen(); }); t_gen_p.detach();
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		for (size_t i = 0; i < thread_count; ++i)
 		{
@@ -372,7 +382,7 @@ public:
 			std::thread t_test_p([=] { find_factors(); }); t_test_p.detach();
 		}
 
-		const uint64_t p2 = 1000000000 * _p_max;
+		const uint64_t p2 = MEGA * _p_max;
 		auto t0 = std::chrono::steady_clock::now();
 		uint64_t p0 = 0;
 
