@@ -11,7 +11,6 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <array>
 #include <queue>
 #include <vector>
 #include <thread>
@@ -19,31 +18,36 @@ Please give feedback to the authors if improvement is realized. It is distribute
 #include <atomic>
 #include <chrono>
 
-#define		MEGA	1000000000
+#define		MEGA	1000000
+#define		GIGA	1000000000
+#define		P_UNIT	GIGA
+
+#define		VECTOR_SIZE		4		// must be a power of two
 
 // Peter L. Montgomery, Modular multiplication without trial division, Math. Comp.44 (1985), 519–521.
 
+// Arithmetic on vectors: hide the latency of the MUL instruction.
+
 // Montgomery form: if 0 <= a < p then r is 2^64 * a mod p
+template <size_t N>
 class MpRes
 {
 private:
-	uint64_t _r;
+	uint64_t _r[N];
 
 public:
-	MpRes() {}
-	explicit MpRes(const uint64_t r) : _r(r) {}
-
-	uint64_t get() const { return _r; }
-	bool operator==(const MpRes & rhs) const { return _r == rhs._r; }
+	uint64_t operator [](const size_t i) const { return _r[i]; }
+	uint64_t & operator [](const size_t i) { return _r[i]; }
 };
 
 // Montgomery modular arithmetic in Z/pZ
+template <size_t N>
 class MpArith
 {
 private:
-	const uint64_t _p, _q;
-	const MpRes _one;		// 2^64 mod p
-	const MpRes _r2;		// (2^64)^2 mod p
+	uint64_t _p[N], _q[N];
+	MpRes<N> _one;		// 2^64 mod p
+	MpRes<N> _r2;		// (2^64)^2 mod p
 
 private:
 	// p * p_inv = 1 (mod 2^64) (Newton's method)
@@ -55,85 +59,89 @@ private:
 	}
 
 	// The Montgomery REDC algorithm
-	uint64_t REDC(const __uint128_t t) const
+	constexpr uint64_t REDC(const __uint128_t t, const uint64_t p, const uint64_t q) const
 	{
-		const uint64_t m = uint64_t(t) * _q;
-		const int64_t r = int64_t((t >> 64) - uint64_t((m * __uint128_t(_p)) >> 64));
-		return (r < 0) ? uint64_t(r + _p) : uint64_t(r);
+		const uint64_t m = uint64_t(t) * q;
+		const int64_t r = int64_t((t >> 64) - uint64_t((m * __uint128_t(p)) >> 64));
+		return (r < 0) ? uint64_t(r + p) : uint64_t(r);
 	}
 
-	MpRes two_pow_64() const
+public:
+	MpArith(const uint64_t * const p)
 	{
-		MpRes t = add(_one, _one); t = add(t, t);		// 4
+		for (size_t k = 0; k < N; ++k)
+		{
+			const uint64_t p_k = p[k];
+			_p[k] = p_k;
+			_q[k] = invert(p_k);
+			_one[k] = (-p_k) % p_k;
+		}
+		
+		MpRes<N> t = add(_one, _one); t = add(t, t);	// 4
 		for (size_t i = 0; i < 5; ++i) t = mul(t, t);	// 4^{2^5} = 2^64
-		return t;
+		_r2 = t;
 	}
 
-public:
-	MpArith(const uint64_t p) : _p(p), _q(invert(p)), _one((-p) % p), _r2(two_pow_64()) { }
-
-	MpRes toMp(const uint64_t n) const { return mul(MpRes(n), _r2); }	// n * (2^64)^2 = (n * 2^64) * (1 * 2^64)
-	uint64_t toInt(const MpRes r) const { return REDC(r.get()); }		// REDC((a * 2^64) * (b * 2^64)) = a*b * 2^64 then REDC((n * 2^64) * 1)) = n
-
-	MpRes one() const { return _one; }	// Montgomery form of 1
-
-	MpRes add(const MpRes a, const MpRes b) const
+	// Convert n to Montgomery representation
+	MpRes<N> toMp(const uint64_t n) const
 	{
-		const uint64_t c = (a.get() >= _p - b.get()) ? _p : 0;
-		return MpRes(a.get() + b.get() - c);
+		// n * (2^64)^2 = (n * 2^64) * (1 * 2^64)
+		MpRes<N> r;
+		for (size_t k = 0; k < N; ++k) r[k] = n;
+		return mul(r, _r2);
 	}
 
-	MpRes sub(const MpRes a, const MpRes b) const
+	static MpRes<N> zero()
 	{
-		const uint64_t c = (a.get() < b.get()) ? _p : 0;
-		return MpRes(a.get() - b.get() + c);
+		MpRes<N> r;
+		for (size_t k = 0; k < N; ++k) r[k] = 0;
+		return r;
 	}
 
-	MpRes mul(const MpRes a, const MpRes b) const
+	MpRes<N> one() const { return _one; }	// Montgomery form of 1
+
+	static bool at_least_one_is_equal(const MpRes<N> & a, const MpRes<N> & b)
 	{
-		return MpRes(REDC(a.get() * __uint128_t(b.get())));
+		bool is_equal = false;
+		for (size_t k = 0; k < N; ++k) is_equal |= (a[k] == b[k]);
+		return is_equal;
+	}
+
+	MpRes<N> add(const MpRes<N> & a, const MpRes<N> & b) const
+	{
+		MpRes<N> r;
+		for (size_t k = 0; k < N; ++k)
+		{
+			const uint64_t c = (a[k] >= _p[k] - b[k]) ? _p[k] : 0;
+			r[k] = a[k] + b[k] - c;
+		}
+		return r;
+	}
+
+	MpRes<N> sub(const MpRes<N> & a, const MpRes<N> & b) const
+	{
+		MpRes<N> r;
+		for (size_t k = 0; k < N; ++k)
+		{
+			const uint64_t c = (a[k] < b[k]) ? _p[k] : 0;
+			r[k] = a[k] - b[k] + c;
+		}
+		return r;
+	}
+
+	MpRes<N> mul(const MpRes<N> & a, const MpRes<N> & b) const
+	{
+		MpRes<N> r;
+		for (size_t k = 0; k < N; ++k)
+		{
+			r[k] = REDC(a[k] * __uint128_t(b[k]), _p[k], _q[k]);
+		}
+		return r;
 	}
 };
 
-// Montgomery arithmetic on vectors of 4 primes: hide the latency of the MUL instruction.
-
-typedef std::array<MpRes, 4> MpRes4;
-
-class MpArith4
-{
-private:
-	const MpArith _mp[4];
-
-public:
-	MpArith4(const uint64_t * const p) : _mp{ p[0], p[1], p[2], p[3] } {}
-
-	MpRes4 toMp(const uint64_t n) const
-	{
-		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].toMp(n); return r;
-	}
-
-	static MpRes4 zero() { return MpRes4{ MpRes(0), MpRes(0), MpRes(0), MpRes(0) }; }
-
-	MpRes4 one() const
-	{
-		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].one(); return r;
-	}
-
-	MpRes4 add(const MpRes4 a, const MpRes4 b) const
-	{
-		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].add(a[k], b[k]); return r;
-	}
-
-	MpRes4 sub(const MpRes4 a, const MpRes4 b) const
-	{
-		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].sub(a[k], b[k]); return r;
-	}
-
-	MpRes4 mul(const MpRes4 a, const MpRes4 b) const
-	{
-		MpRes4 r; for (size_t k = 0; k < 4; ++k) r[k] = _mp[k].mul(a[k], b[k]); return r;
-	}
-};
+typedef MpRes<VECTOR_SIZE> MpResVec;
+typedef MpArith<VECTOR_SIZE> MpArithVec;
 
 class Sieve
 {
@@ -187,11 +195,11 @@ private:
 
 		for (size_t k = 0; k < sieve_size; ++k) sieve[k] = false;
 
-		const uint64_t p0 = ((MEGA * _p_min) / sp_max) * sp_max, p1 = ((MEGA * _p_max) / sp_max + 1) * sp_max;
+		const uint64_t p0 = ((P_UNIT * _p_min) / sp_max) * sp_max, p1 = ((P_UNIT * _p_max) / sp_max + 1) * sp_max;
 
 		{
 			std::lock_guard<std::mutex> guard(_output_mutex);
-			std::cout << ", " << ((p0 == 0) ? 3 : p0) << " <= p <= " << p1 << ", " << _thread_count << " threads" << std::endl;
+			std::cout << ", " << ((p0 == 0) ? 3 : p0) << " <= p <= " << p1 << ", " << _thread_count << " thread(s)" << std::endl;
 		}
 
 		if (_p_min == 0)
@@ -287,18 +295,18 @@ private:
 		// if i <= n_pair then (i - 1) * i < p. Compute n! = (2 * 3) * (4 * 5) * ... * ((n - 1) * n)
 		const uint32_t n_pair = std::max(2u, std::min(n_min, uint32_t(std::sqrt(double(p_vect[0]))) & ~1u));
 
-		// parallel x 4
-		for (size_t j = 0; j < p_size; j += 4)
+		// parallel x VECTOR_SIZE
+		for (size_t j = 0; j < p_size; j += VECTOR_SIZE)
 		{
 			const uint64_t * const p = &p_vect[j];
-			MpArith4 mp(p);
+			MpArithVec mp(p);
 
-			const MpRes4 one = mp.one(), minus_one = mp.sub(mp.zero(), one), two = mp.add(one, one), four = mp.add(two, two), eight = mp.add(four, four);
+			const MpResVec one = mp.one(), minus_one = mp.sub(mp.zero(), one), two = mp.add(one, one), four = mp.add(two, two), eight = mp.add(four, four);
 
 			// ri = residue of i, rf = residue of i!
-			MpRes4 ri = one, rf = one;
+			MpResVec ri = one, rf = one;
 			// residue of i * (i + 1), the step is (i + 2) * (i + 3) - i * (i + 1) = 4 * i + 6
-			MpRes4 r_ixip1 = mp.zero(), r_step = mp.add(four, two);
+			MpResVec r_ixip1 = mp.zero(), r_step = mp.add(four, two);
 
 			// Factorial with pairs of numbers: i! = ((i - 1) * i) * (i - 2)!
 			for (uint64_t i = 2; i < n_pair; i += 2)
@@ -322,11 +330,9 @@ private:
 				ri = mp.add(ri, one);
 				rf = mp.mul(rf, ri);
 
-				bool found_neg = false, found_pos = false;
-				for (size_t k = 0; k < 4; ++k) { found_neg |= (rf[k] == one[k]); found_pos |= (rf[k] == minus_one[k]); }
-				if (found_neg | found_pos)
+				if (MpArithVec::at_least_one_is_equal(rf, one) | MpArithVec::at_least_one_is_equal(rf, minus_one))
 				{
-					for (size_t k = 0; k < 4; ++k)
+					for (size_t k = 0; k < VECTOR_SIZE; ++k)
 					{
 						if (rf[k] == one[k]) output(p[k], n_min + i, false, i);
 						if (rf[k] == minus_one[k]) output(p[k], n_min + i, true, i);
@@ -382,29 +388,40 @@ public:
 			std::thread t_test_p([=] { find_factors(); }); t_test_p.detach();
 		}
 
-		const uint64_t p2 = MEGA * _p_max;
-		auto t0 = std::chrono::steady_clock::now();
-		uint64_t p0 = 0;
+		const uint64_t p_end = P_UNIT * _p_max;
+		const auto start = std::chrono::steady_clock::now();
+
+		uint64_t p_prev = 0;
+		auto t0 = start;
+		double eta = 20;
 
 		while (_running_threads != 0)
 		{
-			std::this_thread::sleep_for(std::chrono::seconds(10));
-			const uint64_t p1 = _p_cur;
+			std::this_thread::sleep_for((eta >= 20) ? std::chrono::seconds(10) : std::chrono::seconds(1));
+			const uint64_t p_cur = _p_cur;
 			const auto t1 = std::chrono::steady_clock::now();
 			const std::chrono::duration<double> dt = t1 - t0;
-			if (p0 != 0)
+			if (p_prev != 0)
 			{
-				const double speed = (p1 / log(p1) - p0 / log(p0)) / dt.count();
-				const double eta = dt.count() / (p1 - p0) * (p2 - p1);
+				const double speed = (p_cur / log(p_cur) - p_prev / log(p_prev)) / dt.count();
+				eta = (p_cur == p_prev) ? 0.0 : std::max(dt.count() / (p_cur - p_prev) * int64_t(p_end - p_cur), 0.0);
 				std::lock_guard<std::mutex> guard(_output_mutex);
 				size_t count_m = 0; for (bool b : _sieve_m) count_m += b ? 1 : 0;
 				size_t count_p = 0; for (bool b : _sieve_p) count_p += b ? 1 : 0;
-				std::cout << "p = " << p1 << ", "
+				std::cout << "p = " << p_cur << ", "
 					<< count_m << "/" << n_count << " factors+, " << count_p << "/" << n_count << " factors-, "
 				 	<< int(speed) << " p/sec, ETA = " << int(eta / 60.0) << " min      \r";
 			}
-			t0 = t1; p0 = p1;
+			t0 = t1; p_prev = p_cur;
 		}
+
+		const std::chrono::duration<double> dt = std::chrono::steady_clock::now() - start;
+		const uint64_t p_start = P_UNIT * _p_min;
+		const double speed = (p_prev / log(p_prev) - p_start / log(p_start)) / dt.count();
+		size_t count_m = 0; for (bool b : _sieve_m) count_m += b ? 1 : 0;
+		size_t count_p = 0; for (bool b : _sieve_p) count_p += b ? 1 : 0;
+		std::cout << count_m << "/" << n_count << " factors+, " << count_p << "/" << n_count << " factors-, "
+				  << int(speed) << " p/sec, " << int(dt.count()) << " sec.                                  " << std::endl;
 	}
 
 	virtual ~Sieve() {}
