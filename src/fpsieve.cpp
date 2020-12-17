@@ -165,10 +165,10 @@ private:
 	std::mutex _p_queue_mutex;
 	std::queue<PArray> _p_queue;
 	bool _end_range = false;
-	std::atomic<size_t> _running_threads = 0;
+	std::atomic<size_t> _running_threads;
 
 	std::mutex _output_mutex;
-	std::atomic<uint64_t> _p_cur = 0;
+	std::atomic<uint64_t> _p_cur;
 
 private:
 	void pseudo_prime_gen()
@@ -379,6 +379,9 @@ public:
 		: _n_min(n_min), _n_count(n_count), _p_min(p_min), _p_max(p_max), _thread_count(thread_count)
 	{
 		_sieve_m.resize(n_count, false); _sieve_p.resize(n_count, false);
+
+		_running_threads = 0;
+		_p_cur = 0;
 
 		std::thread t_gen_p([=] { pseudo_prime_gen(); }); t_gen_p.detach();
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
