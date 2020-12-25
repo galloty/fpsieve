@@ -62,8 +62,9 @@ private:
 	constexpr uint64_t REDC(const __uint128_t t, const uint64_t p, const uint64_t q) const
 	{
 		const uint64_t m = uint64_t(t) * q;
-		const int64_t r = int64_t((t >> 64) - uint64_t((m * __uint128_t(p)) >> 64));
-		return (r < 0) ? uint64_t(r + p) : uint64_t(r);
+		const uint64_t t_hi = uint64_t(t >> 64), mp = uint64_t((m * __uint128_t(p)) >> 64);
+		const uint64_t r = t_hi - mp;
+		return (t_hi < mp) ? r + p : r;
 	}
 
 public:
