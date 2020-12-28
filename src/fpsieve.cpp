@@ -294,7 +294,7 @@ private:
 		uint32_t n_min = _n_min, n_count = _n_count;
 
 		// if i <= n_pair then (i - 1) * i < p. Compute n! = (2 * 3) * (4 * 5) * ... * ((n - 1) * n)
-		const uint32_t n_pair = std::max(2u, std::min(n_min, uint32_t(std::sqrt(double(p_vect[0]))) & ~1u));
+		const uint32_t n_pair = std::max(2u, std::min(n_min, uint32_t(std::sqrt(double(p_vect[0])))) & ~1u);
 
 		// parallel x VECTOR_SIZE
 		for (size_t j = 0; j < p_size; j += VECTOR_SIZE)
